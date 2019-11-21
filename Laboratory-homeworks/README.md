@@ -8,3 +8,7 @@ Controlling a RGB Led using 3 potentiometer. Each potentiometer controls a color
 ### thirdLabHomework.ino
 
 Detects a knock with a passive buzzer, plays a tone after a 5 seconds delay, and stops it with a push button.
+
+### fourthLabHomework.ino
+
+Four digit seven segment controlled by joystick. Using the axis of the joystick you can increase or decrease digits on the display independently.
