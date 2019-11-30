@@ -12,3 +12,11 @@ Detects a knock with a passive buzzer, plays a tone after a 5 seconds delay, and
 ### fourthLabHomework.ino
 
 Four digit seven segment controlled by joystick. Using the axis of the joystick you can increase or decrease digits on the display independently.
+
+
+### fifthLabHomework.ino
+
+Displays a menu on a LCD. The menu has 3 states: main, game and options. In the options you can setup the starting level and check your highscore. The game lasts 10 seconds, in which your score increases based on the current level.
+
+Demo:
+[A short video demonstrating the "gameplay"](https://drive.google.com/file/d/1ATAUBdnOHIqmP9Y2Gb8Me1QOyCGzwcDZ/view?usp=drivesdk)
