@@ -1,6 +1,7 @@
 #include <SPI.h>
 #include <TFT.h>
 #include "LedControl.h"
+#include <EEPROM.h>
 
 //TFT screen pins
 const int CS = 10;
@@ -89,7 +90,7 @@ byte enemiesMatrix[enemiesMatrixSize][matrixSize];
 short int initialTimeBetweenEnemyBullets;
 short int initialEnemyBulletSpeed;
 short int timeBetweenEnemyBullets = 1000;
-short int enemyBulletSpeed = 150;
+short int enemyBulletSpeed = 180;
 
 unsigned long int lastEnemyBulletSpeedUpdate = 0;
 unsigned long int lastEnemyBulletUpdate = 0;
@@ -112,7 +113,7 @@ struct enemy {
   short int enemyYPosition;
 };
 
-enemy myEnemies[32];
+enemy myEnemies[matrixSize * matrixSize];
 
 short int currentNumberOfEnemies = 0;
 
@@ -128,6 +129,39 @@ char livesText[3];
 short int level = 0;
 char levelText[3];
 
+int highScore = 0;
+char highScoreText[3];
+int eepromAddress = 0;
+
+int enemiesMatrixColumnSum = 0;
+
+short int enemyMatrixColumnIterator = 0;
+short int columnToSpawnPowerUpOn = -1;
+short int rowToSpawnPowerUpOn = -1;
+int numberOfEnemiesKilledNeededForPowerUp = 6;
+int numberOfEnemiesKilled = 0;
+
+bool canBlinkPowerUp = false;
+bool powerUpIsActive = false;
+bool powerUpLedState = false;
+const int blinkPowerUpDelay = 50;
+long int lastPowerUpBlink = 0;
+
+enum powerUpType {SCORE, LIFE};
+
+powerUpType currentPowerUpType;
+
+byte powerUpPossibleSpawnColumns[8];
+
+const int scorePowerUpValue = 10;
+const int livePowerUpValue = 1;
+
+bool enemyBulletSpawned = false;
+bool enemyBulletMoving = false;
+
+short int xPositionToSpawnEnemyBulletAt = 0;
+short int yPositionToSpawnEnemyBulletAt = 0;
+
 void setup() {
   initializeTFT();
   initializeLC();
@@ -135,7 +169,7 @@ void setup() {
 
   pinMode(buttonPin, INPUT_PULLUP);
 
-  //activateMainMenu();
+  loadHighScore();
 
   backupVariables();
 
@@ -264,7 +298,7 @@ void handleMoveRight() {
 }
 
 void handleMoveDown(int numberOfElementsOnMenu) {
-  if (valueIsLowerThanThreshold(joyYValue, minThreshold) && valueIsFalse(joyMovedY)) {
+  if (valueIsLowerThanThreshold(joyYValue, minThreshold) && (joyMovedY == 0)) {
     currentMenuCursorPosition++;
     if (currentMenuCursorPosition >= numberOfElementsOnMenu) {
       currentMenuCursorPosition = 0;
@@ -280,7 +314,7 @@ void handleMoveDown(int numberOfElementsOnMenu) {
 }
 
 void handleMoveUp(int numberOfElementsOnMenu) {
-  if (valueIsHigherThanThreshold(joyYValue, maxThreshold) && valueIsFalse(joyMovedY)) {
+  if (valueIsHigherThanThreshold(joyYValue, maxThreshold) && (joyMovedY == 0)) {
     currentMenuCursorPosition--;
     if (currentMenuCursorPosition < 0) {
       currentMenuCursorPosition = numberOfElementsOnMenu - 1;
@@ -303,7 +337,16 @@ void handleGameplay() {
 
   handleCenter();
 
-  spawnEnemyBullets();
+  if (!enemyBulletSpawned) {
+    spawnEnemyBullets();
+  }
+  else {
+    shootEnemyEgg();
+  }
+
+  if (canBlinkPowerUp) {
+    blinkPowerUp();
+  }
 }
 
 //yPos -> row
@@ -426,9 +469,9 @@ void spawnEnemies() {
       //                m[2][1] = 17 is j+i+14
       //                m[2][2] = 18 is j+i+14
 
-      // so for row 0 i can use j+i+(SIZE-1)*i, for 1 i can use j+i+(SIZE-1)*i, same for (j+i)+(SIZE-1)*i
+      //so the general formula is (j+i)+(SIZE-1)*i ==> after calculus i * SIZE + j
 
-      int indexToPosition = (j + i) + (matrixSize - 1) * i; //transforms the col and row positions into vectory index pos
+      int indexToPosition = i * matrixSize + j;
       myEnemies[indexToPosition].isActive = true;
       myEnemies[indexToPosition].enemyXPosition = i + 1;//enemy bullet position
       myEnemies[indexToPosition].enemyYPosition = j;
@@ -439,8 +482,6 @@ void spawnEnemies() {
 }
 
 void spawnEnemyBullets() {
-  //lastEnemyBulletUpdate = millis();
-
   if ((millis() - lastEnemyBulletUpdate) > timeBetweenEnemyBullets) {
     short int randomIndex = random(4 * numberOfRows);
 
@@ -448,42 +489,49 @@ void spawnEnemyBullets() {
       randomIndex = random(4 * numberOfRows);
     }
 
-    //TO DO
-    //short int enemyBelowIndex = (myEnemies[randomIndex].enemyXPosition + myEnemies[randomIndex].enemyYPosition) + (matrixSize - 1) * myEnemies[randomIndex].enemyXPosition;
-    short int enemyBelowIndex = randomIndex + matrixSize;
-    if (myEnemies[enemyBelowIndex].isActive) {
-      myEnemies[randomIndex].enemyXPosition += 1;
-    }
+    xPositionToSpawnEnemyBulletAt = myEnemies[randomIndex].enemyYPosition;
+    yPositionToSpawnEnemyBulletAt = myEnemies[randomIndex].enemyXPosition;
 
-    //without ^^^^^, the invaders which have in front of them another invaders will turn them off while shooting
-
-    shootEnemyEgg(myEnemies[randomIndex].enemyYPosition, myEnemies[randomIndex].enemyXPosition);
+    enemyBulletSpawned = true;
 
     lastEnemyBulletUpdate = millis();
   }
 }
 
-void shootEnemyEgg(int xPosition, int yPosition) {
-  //lastEnemyBulletSpeedUpdate = millis();
-  while (yPosition <= 7) {
-    if ((millis() - lastEnemyBulletSpeedUpdate) > enemyBulletSpeed) {
+void shootEnemyEgg() {
+  if ((millis() - lastEnemyBulletSpeedUpdate) > enemyBulletSpeed) {
+    short int enemyBulletPositionInEnemyVector = yPositionToSpawnEnemyBulletAt * matrixSize + xPositionToSpawnEnemyBulletAt;
 
-      lc.setLed(0, yPosition, xPosition, false);
-      yPosition++;
-      lc.setLed(0, yPosition, xPosition, true);
+    //turn off the led only if there isn't an active enemy on the bullet's position
+    if (myEnemies[enemyBulletPositionInEnemyVector].isActive == false ) {
+      lc.setLed(0, yPositionToSpawnEnemyBulletAt, xPositionToSpawnEnemyBulletAt, false);
+    }
 
-      if (yPosition == (currentYPos + 1) && xPosition == currentXPos) {
-        updateLives();
+    yPositionToSpawnEnemyBulletAt++;
 
+    lc.setLed(0, yPositionToSpawnEnemyBulletAt, xPositionToSpawnEnemyBulletAt, true);
+
+    //check if bullet position equals player's position
+    if (yPositionToSpawnEnemyBulletAt == currentYPos + 1) {
+      if (xPositionToSpawnEnemyBulletAt == currentXPos) {
+        updateLives(-1);
         if (currentLives == 0) {
           activateGameOver();
+          if (score > highScore) {
+            saveHighScore();
+            printHighScoreBeatenMessage();
+          }
         }
       }
-      lastEnemyBulletSpeedUpdate = millis();
     }
-  }
 
-  lc.setLed(0, 7, xPosition, false);
+    if (yPositionToSpawnEnemyBulletAt == matrixSize) {
+      lc.setLed(0, 7, xPositionToSpawnEnemyBulletAt, false);
+      enemyBulletSpawned = false;
+    }
+
+    lastEnemyBulletSpeedUpdate = millis();
+  }
 }
 
 void handleGameover() {
@@ -542,6 +590,9 @@ void handleLevelFinishedCurrentCursorPosition() {
       break;
     case 1:
       //quit to main menu;
+      if(score > highScore){
+        saveHighScore();
+      }
       activateMainMenu();
       break;
   }
@@ -577,7 +628,7 @@ void handleOptionsCurrentCursorPosition() {
       //nothing to do here(level difficulty chooser)
       break;
     case 1:
-      //TODO reset highscore
+      resetHighScore();
       break;
     case 2:
       activateMainMenu();
@@ -607,7 +658,7 @@ void lightOffMatrix() {
 }
 
 void moveCursorToNextPosition(int numberOfElementsOnMenu, int isNotPlayMenu) { //isNotPlayMenu is true if it is a menu type(main menu/options menu/ game menu), 0 if it is a game menu
-  if (valueIsTrue(isNotPlayMenu)) {
+  if (isNotPlayMenu == 1) {
     ClearAllMenuCursors(numberOfElementsOnMenu);
     SetCursorAtCurrentMenuPosition();
   }
@@ -737,12 +788,17 @@ void activatePlayMenu() {
   String myLivesText = String(lives);
   myLivesText.toCharArray(livesText, 3);
 
+  String myHighScoreText = String(highScore);
+  myHighScoreText.toCharArray(highScoreText, 3);
+
   myScreen.setTextSize(2);
   myScreen.text("Lives: ", 0, 0);
   myScreen.text(livesText, 73, 0);
-  myScreen.text("Score:", 0, 55);
-  myScreen.text(scoreText, 73, 55);
+  myScreen.text("Score:", 0, 35);
+  myScreen.text(scoreText, 73, 35);
   myScreen.text("Level: ", 40, 100);
+  myScreen.text("HighScore:", 0, 65);
+  myScreen.text(highScoreText, 120, 65);
 
   String myLevelText = String(level);
   myLevelText.toCharArray(levelText, 3);
@@ -757,25 +813,25 @@ void activatePlayMenu() {
   myScreen.text(levelText, 115, 100);
 }
 
-void updateScore() {
+void updateScore(int valueToUpdateScoreWith) {
   myScreen.setTextSize(2);
 
   String myScoreText = String(score);
   myScoreText.toCharArray(scoreText, 3);
 
   myScreen.stroke(0, 0, 0);
-  myScreen.text(scoreText, 73, 55);
+  myScreen.text(scoreText, 73, 35);
 
-  score++;
+  score += valueToUpdateScoreWith;
 
   myScoreText = String(score);
   myScoreText.toCharArray(scoreText, 3);
 
   myScreen.stroke(255, 255, 255);
-  myScreen.text(scoreText, 73, 55);
+  myScreen.text(scoreText, 73, 35);
 }
 
-void updateLives() {
+void updateLives(int valueToUpdateLivesWith) {
   myScreen.setTextSize(2);
 
   String myLivesText = String(currentLives);
@@ -784,7 +840,7 @@ void updateLives() {
   myScreen.stroke(0, 0, 0);
   myScreen.text(livesText, 73, 0);
 
-  currentLives--;
+  currentLives += valueToUpdateLivesWith;
 
   myLivesText = String(currentLives);
   myLivesText.toCharArray(livesText, 3);
@@ -841,6 +897,10 @@ void moveBullet(int xPosition, int bulletIndex) {
       lc.setLed(0, i, xPosition, false);
       i--;
 
+      if (checkIfPlayerBulletHitPowerup(i, xPosition)) {
+        break;
+      }
+
       //turn on led at next bullet position
       lc.setLed(0, i, xPosition, true);
 
@@ -852,17 +912,43 @@ void moveBullet(int xPosition, int bulletIndex) {
     lc.setLed(0, 0, xPosition, false);
   }
   else {
-    updateScore();
+    updateScore(1);
 
     currentNumberOfEnemies--;
 
+    numberOfEnemiesKilled++;
+
     if (currentNumberOfEnemies == 0) {
       activateLevelFinished();
+    }
+    else {
+      if (!powerUpIsActive && numberOfEnemiesKilled == numberOfEnemiesKilledNeededForPowerUp) {
+        checkForColumnToSpawnPowerUpOn();
+      }
     }
   }
 
   bulletsUsed--;
   myBullets[bulletIndex].isActive = false;
+}
+
+bool checkIfPlayerBulletHitPowerup(int playerBulletXPos, int playerBulletYPos) {
+  if (playerBulletXPos == rowToSpawnPowerUpOn && playerBulletYPos == columnToSpawnPowerUpOn) {
+    if (currentPowerUpType == SCORE) {
+      updateScore(scorePowerUpValue);
+    }
+    else {
+      updateLives(livePowerUpValue);
+    }
+
+    canBlinkPowerUp = false;
+    powerUpIsActive = false;
+
+    lc.setLed(0, playerBulletXPos, playerBulletYPos, false);
+
+    return true;
+  }
+  return false;
 }
 
 void activateLevelFinished() {
@@ -899,12 +985,25 @@ void resetGameVariables() {
   String myScoreText = String(score);
   myScoreText.toCharArray(scoreText, 3);
   myScreen.stroke(0, 0, 0);
-  myScreen.text(scoreText, 73, 55);
+  myScreen.text(scoreText, 73, 35);
+
   score = 0;
+
+  myScoreText = String(score);
+  myScoreText.toCharArray(scoreText, 3);
+  myScreen.stroke(255, 255, 255);
+  myScreen.text(scoreText, 73, 35);
 }
 
 void resetLevelVariables() {
   currentNumberOfEnemies = 0;
+
+  numberOfEnemiesKilled = 0;
+
+  canBlinkPowerUp = false;
+  powerUpIsActive = false;
+
+  enemyBulletSpawned = false;
 
   currentLives = lives;
 }
@@ -929,6 +1028,8 @@ void playNextLevel() {
   clearMatrixesAndValues();
 
   resetLevelVariables();
+
+  loadHighScore();
 
   activatePlayMenu();
 
@@ -978,6 +1079,8 @@ void playNextLevel() {
 void playAgain() {
   level = 0;
 
+  loadHighScore();
+
   activatePlayMenu();
 
   clearMatrixesAndValues();
@@ -989,12 +1092,87 @@ void playAgain() {
   initializeGameplay();
 }
 
-int valueIsTrue(int valueToCheck) {
-  return valueToCheck == 1;
+void checkForColumnToSpawnPowerUpOn() {
+  resetPowerUpSpawnPositions();
+
+  for (int i = 0; i < matrixSize; i++) {//cols
+    enemyMatrixColumnIterator = 0;
+
+    for (int j = 0; j < enemiesMatrixSize; j++) {//rows
+      if (enemiesMatrix[j][i] == 1) {
+        break;
+      }
+      enemyMatrixColumnIterator++;
+    }
+
+    if (enemyMatrixColumnIterator == enemiesMatrixSize) {
+      powerUpPossibleSpawnColumns[i] = 1;
+    }
+  }
+
+  columnToSpawnPowerUpOn = random(matrixSize);
+
+  while (powerUpPossibleSpawnColumns[columnToSpawnPowerUpOn] == 0)
+  {
+    columnToSpawnPowerUpOn = random(matrixSize);
+  }
+
+  spawnPowerUp();
 }
 
-int valueIsFalse(int valueToCheck) {
-  return valueToCheck == 0;
+void spawnPowerUp() {
+  rowToSpawnPowerUpOn = random(enemiesMatrixSize);
+
+  lc.setLed(0, rowToSpawnPowerUpOn, columnToSpawnPowerUpOn, true);
+
+  lastPowerUpBlink = millis();
+  powerUpIsActive = true;
+  canBlinkPowerUp = true;
+  powerUpLedState = true;
+}
+
+void resetPowerUpSpawnPositions() {
+  for (int i = 0; i < matrixSize; i++) {
+    powerUpPossibleSpawnColumns[i] = 0;
+  }
+}
+
+void blinkPowerUp() {
+  if (millis() - lastPowerUpBlink > blinkPowerUpDelay)
+  {
+    powerUpLedState = !powerUpLedState;
+    lc.setLed(0, rowToSpawnPowerUpOn, columnToSpawnPowerUpOn, powerUpLedState);
+
+    //for more fun and randomness, instead of making a random before spawning the powerup, the powerup type changes with every blink, so noone knows what the powerup is gonna be
+    if (powerUpLedState) {
+      currentPowerUpType = SCORE;
+    }
+    else {
+      currentPowerUpType = LIFE;
+    }
+
+    lastPowerUpBlink = millis();
+  }
+}
+
+void loadHighScore() {
+  EEPROM.get(eepromAddress, highScore);
+}
+
+void saveHighScore() {
+  highScore = score;
+  EEPROM.put(eepromAddress, highScore);
+}
+
+void resetHighScore(){
+  highScore = 0;
+  EEPROM.put(eepromAddress, highScore);
+}
+
+void printHighScoreBeatenMessage() {
+  myScreen.setTextSize(1);
+  myScreen.text("HighScore beaten!", 45, 40);
+  myScreen.setTextSize(2);
 }
 
 int valueIsLowerThanThreshold(int valueToCheck, int threshold) {
