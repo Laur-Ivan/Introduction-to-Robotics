@@ -33,6 +33,6 @@ Also, the progression is infinite, there isn't any level cap or anything like th
 Have fun! <3
 
 
-## Link to video demo: https://drive.google.com/file/d/1HRuNuPvmkk_0818p13q-bctouRYEhc6B/view
+## Link to video demo: https://youtu.be/k3knqTSGdto
 
 ## Image with the whole assembled hardware: https://drive.google.com/file/d/1HVGYoEvkDc9XcntWm2yH34Y7QUUAoEyU/view
